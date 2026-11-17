@@ -3,21 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DeadlineOS · Countdown Lock-Screen Generator</title>
+<title>Tzero · Countdown lock-screen generator</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800&family=Fraunces:ital,wght@1,600&family=Manrope:wght@500;600;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 <header>
-  <div class="brand"><div class="logo"><i></i></div>DeadlineOS</div>
+  <div class="brand">
+    <div class="logo" aria-hidden="true">T0</div>
+    Tzero
+  </div>
   <div class="chip"><b></b>Live countdown</div>
 </header>
 
 <main class="grid">
   <div class="col">
+
+    <!-- Countdown panel -->
     <section class="panel">
-      <h2>Mission countdown</h2>
+      <h2>Countdown</h2>
       <div class="goal" id="goalView"></div>
       <div class="cd">
         <div class="cell"><strong id="d">0</strong><span>Days</span></div>
@@ -30,39 +36,99 @@
       <div class="done-banner" id="banner">Deadline reached. Set a new goal below.</div>
     </section>
 
+    <!-- Customize panel -->
     <section class="panel">
       <h2>Customize</h2>
-      <div class="row">
-        <div><label for="goal">Goal title</label><input type="text" id="goal" maxlength="60"></div>
-        <div><label for="dead">Deadline</label><input type="datetime-local" id="dead"></div>
+      <div class="form-row">
+        <div>
+          <label for="goal">Goal title</label>
+          <input type="text" id="goal" maxlength="60" placeholder="Build My AI Project">
+        </div>
+        <div>
+          <label for="dead">Deadline</label>
+          <input type="datetime-local" id="dead">
+        </div>
       </div>
-      <div class="themes"><span>Wallpaper theme</span><div id="themes" style="display:flex;gap:10px"></div></div>
+      <div class="form-row" style="margin-top:14px">
+        <div>
+          <label for="device">Phone size</label>
+          <select id="device">
+            <option value="android-916">Android · 9:16 (1080 × 1920)</option>
+            <option value="android-tall">Pixel / tall Android · 20:9 (1080 × 2400)</option>
+            <option value="iphone">iPhone · 19.5:9 (1170 × 2532)</option>
+            <option value="iphone-max">iPhone Pro Max (1290 × 2796)</option>
+          </select>
+        </div>
+      </div>
     </section>
 
+    <!-- T-minus milestones panel -->
     <section class="panel">
-      <h2>Weekly milestones <span id="msCount"></span></h2>
-      <ul class="list" id="ms"></ul>
-      <form class="add" id="msForm"><input type="text" id="msIn" placeholder="Add a weekly milestone" maxlength="70"><button class="btn" type="submit">Add</button></form>
+      <h2>T-minus milestones <span id="msCount"></span></h2>
+      <ul class="list" id="ms" role="list"></ul>
+      <div id="msMaxMsg" class="helper-text" style="display:none">7 milestones max so the wallpaper stays readable</div>
+      <form class="add" id="msForm" novalidate>
+        <div class="add-fields">
+          <div class="add-field-days">
+            <label for="msOffset">Days before deadline</label>
+            <input type="number" id="msOffset" min="0" max="365" placeholder="e.g. 14">
+          </div>
+          <div class="add-field-milestone">
+            <label for="msIn">Milestone <span class="dim">(max 5 words)</span></label>
+            <input type="text" id="msIn" placeholder="Short title" maxlength="60">
+            <div class="word-counter" id="msWordCount" aria-live="polite">0/5 words</div>
+            <div class="inline-err" id="msErr" role="alert"></div>
+          </div>
+        </div>
+        <button class="btn" type="submit" id="msAdd">Add milestone</button>
+      </form>
+
+      <!-- Inline edit form (hidden) -->
+      <div id="msEditWrap" class="edit-wrap" style="display:none">
+        <h3 style="font-size:13px;margin-bottom:10px;color:var(--frost)">Edit milestone</h3>
+        <div class="add-fields">
+          <div class="add-field-days">
+            <label for="msEditOffset">Days before deadline</label>
+            <input type="number" id="msEditOffset" min="0" max="365">
+          </div>
+          <div class="add-field-milestone">
+            <label for="msEditIn">Milestone <span class="dim">(max 5 words)</span></label>
+            <input type="text" id="msEditIn" maxlength="60">
+            <div class="word-counter" id="msEditWordCount" aria-live="polite">0/5 words</div>
+            <div class="inline-err" id="msEditErr" role="alert"></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:10px">
+          <button class="btn" id="msEditSave">Save</button>
+          <button class="btn ghost" id="msEditCancel">Cancel</button>
+        </div>
+      </div>
     </section>
 
+    <!-- Daily checklist panel -->
     <section class="panel">
       <h2>Daily checklist <span id="tkCount"></span></h2>
-      <ul class="list" id="tk"></ul>
-      <form class="add" id="tkForm"><input type="text" id="tkIn" placeholder="Add a daily task" maxlength="50"><button class="btn" type="submit">Add</button></form>
+      <p class="helper-text">Daily tasks reset every day and are not on the wallpaper.</p>
+      <ul class="list" id="tk" role="list" style="margin-top:12px"></ul>
+      <form class="add" id="tkForm">
+        <label for="tkIn" class="sr-only">New daily task</label>
+        <input type="text" id="tkIn" placeholder="Add a daily task" maxlength="50">
+        <button class="btn" type="submit">Add</button>
+      </form>
     </section>
+
   </div>
 
   <aside class="phone-col">
     <div class="phone">
-      <div class="screen">
-        <canvas id="cv" width="1080" height="1920"></canvas>
-        <div class="notch"></div>
-        <div class="clock"><small id="cDate"></small><b id="cTime"></b></div>
+      <div class="screen" id="screen">
+        <canvas id="cv" width="1080" height="1920" role="img" aria-label="Wallpaper preview"></canvas>
+        <div class="notch" aria-hidden="true"></div>
+        <div class="clock" aria-hidden="true"><small id="cDate"></small><b id="cTime"></b></div>
       </div>
     </div>
     <div class="dl">
-      <button class="btn" id="download">Download wallpaper (PNG)</button>
-      <p>Exports 1080 × 1920 · The clock area is left clear for your phone’s own lock-screen clock.</p>
+      <button class="btn" id="download" disabled>Download wallpaper (PNG)</button>
     </div>
   </aside>
 </main>

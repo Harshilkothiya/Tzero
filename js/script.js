@@ -1,249 +1,832 @@
 "use strict";
-/* ---------- Config & state ---------- */
-const KEY = "deadlineos.v1";
-const W = 1080, H = 1920;
-const FONT = '"Space Grotesk","Inter","SF Pro Display","Segoe UI",system-ui,sans-serif';
-const THEMES = [
-  {name:"Aurora", bg:["#070716","#17124a","#0b1f5c"], a:"#4f8cff", b:"#9b5cff"},
-  {name:"Nebula", bg:["#0a0618","#2a0f52","#12123f"], a:"#b45cff", b:"#ff5fa8"},
-  {name:"Ocean",  bg:["#050b18","#0b2a5c","#0d1450"], a:"#35c8ff", b:"#6a6dff"}
-];
-const pad = n => String(n).padStart(2, "0");
-const todayKey = () => new Date().toDateString();
-const esc = s => s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
-function defaults(){
+/* ============================================================
+   TZERO — js/script.js
+   ============================================================ */
+
+/* ---------- Constants ---------- */
+const KEY     = "tzero.v1";
+const OLD_KEY = "deadlineos.v1";
+const WORD_LIMIT = 5;
+const MAX_MS  = 7;
+
+const DEVICE_PRESETS = {
+  "android-916":  { label: "Android · 9:16",           W: 1080, H: 1920 },
+  "android-tall": { label: "Pixel / tall Android · 20:9", W: 1080, H: 2400 },
+  "iphone":       { label: "iPhone · 19.5:9",           W: 1170, H: 2532 },
+  "iphone-max":   { label: "iPhone Pro Max",             W: 1290, H: 2796 },
+};
+
+const DEFAULT_MILESTONES = [
+  { offset: 28, t: "Lock scope and metric",  icon: "scope", done: false },
+  { offset: 21, t: "Baseline model working", icon: "base",  done: false },
+  { offset: 14, t: "Train and evaluate",     icon: "train", done: false },
+  { offset:  7, t: "Build app and UI",       icon: "app",   done: false },
+  { offset:  3, t: "Test and write docs",    icon: "test",  done: false },
+  { offset:  0, t: "Launch and demo",        icon: "go",    done: false },
+];
+
+const ICONS = {
+  scope: "M12 3a9 9 0 1 0 0 18a9 9 0 0 0 0-18Z M12 8a4 4 0 1 0 0 8a4 4 0 0 0 0-8Z M12 1v4 M12 19v4 M1 12h4 M19 12h4",
+  base:  "M12 2 3 7l9 5 9-5-9-5Z M3 12l9 5 9-5 M3 17l9 5 9-5",
+  train: "M3 3v18h18 M7 15l4-5 3 3 5-7",
+  app:   "M3 5h18v14H3Z M3 9h18 M6.5 7h.01 M9 7h.01",
+  test:  "M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5l8-3Z M8.5 12l2.5 2.5 4.5-5",
+  go:    "M12 2c3 2.5 4.5 6 4.5 10l-2 3h-5l-2-3c0-4 1.5-7.5 4.5-10Z M12 9a1.5 1.5 0 1 0 0 3a1.5 1.5 0 0 0 0-3Z M7.5 13l-3 4 3.5-1 M16.5 13l3 4-3.5-1 M10.5 18.5c.3 1.5.9 2.5 1.5 3 .6-.5 1.2-1.5 1.5-3",
+};
+const ICON_KEYS = Object.keys(ICONS);
+
+/* ---------- Helpers ---------- */
+const pad       = n  => String(n).padStart(2, "0");
+const todayKey  = () => new Date().toDateString();
+const esc       = s  => s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const wordCount = s  => s.trim() === "" ? 0 : s.trim().split(/\s+/).length;
+
+function slugify(str) {
+  return str.toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "tzero";
+}
+
+/* ---------- Defaults ---------- */
+function defaults() {
   return {
-    goal: "Build My AI Project",
-    deadline: "2026-12-15T23:59",
-    start: Date.now(),
-    theme: 0,
-    day: todayKey(),
-    milestones: [
-      {t:"Week 1 · Define scope, dataset & success metric", done:false},
-      {t:"Week 2 · Build baseline model & pipeline", done:false},
-      {t:"Week 3 · Train, evaluate & iterate", done:false},
-      {t:"Week 4 · Build the app / UI & integrate", done:false},
-      {t:"Week 5 · Test, polish & write docs", done:false},
-      {t:"Final days · Launch & demo", done:false}
-    ],
+    goal:       "Build My AI Project",
+    deadline:   "2026-12-15T23:59",
+    start:      Date.now(),
+    theme:      0,
+    device:     "android-916",
+    day:        todayKey(),
+    milestones: DEFAULT_MILESTONES.map(m => ({ ...m })),
     tasks: [
-      {t:"2 hours of focused deep work", done:false},
-      {t:"Run or review one experiment", done:false},
-      {t:"Write a short progress note", done:false},
-      {t:"Plan tomorrow’s top task", done:false}
-    ]
+      { t: "2 hours of focused deep work",  done: false },
+      { t: "Run or review one experiment",  done: false },
+      { t: "Write a short progress note",   done: false },
+      { t: "Plan tomorrow's top task",       done: false },
+    ],
   };
 }
+
+/* ---------- State load + migration ---------- */
 let S = defaults();
 try {
-  const saved = JSON.parse(localStorage.getItem(KEY));
-  if (saved && saved.goal) S = Object.assign(S, saved);
+  let saved = JSON.parse(localStorage.getItem(KEY));
+  if (!saved) {
+    // Try migrating from old key
+    const old = JSON.parse(localStorage.getItem(OLD_KEY));
+    if (old && old.goal) {
+      saved = { goal: old.goal, deadline: old.deadline, start: old.start, tasks: old.tasks };
+    }
+  }
+  if (saved && saved.goal) {
+    S = Object.assign(S, saved);
+    // If milestones lack numeric offset, replace with defaults
+    if (!S.milestones || !S.milestones.length || typeof S.milestones[0].offset !== "number") {
+      S.milestones = DEFAULT_MILESTONES.map(m => ({ ...m }));
+    }
+  }
 } catch (e) {}
-if (S.day !== todayKey()) { S.tasks.forEach(t => t.done = false); S.day = todayKey(); }  // daily reset
+
+// Daily reset
+if (S.day !== todayKey()) {
+  S.tasks.forEach(t => t.done = false);
+  S.day = todayKey();
+}
+
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
 
-/* ---------- Countdown maths ---------- */
-function calc(){
+/* ---------- Device / canvas sizing ---------- */
+let W = 1080, H = 1920;
+
+function applyDevice(id) {
+  const p = DEVICE_PRESETS[id] || DEVICE_PRESETS["android-916"];
+  W = p.W; H = p.H;
+  cv.width  = W;
+  cv.height = H;
+  // Update screen aspect ratio
+  document.getElementById("screen").style.aspectRatio = `${W} / ${H}`;
+}
+
+/* ---------- Milestone helpers ---------- */
+function sortMilestones() {
+  S.milestones.sort((a, b) => b.offset - a.offset);
+}
+
+function msDate(offset) {
+  const dl = new Date(S.deadline);
+  if (isNaN(dl)) return "";
+  const d = new Date(dl);
+  d.setDate(d.getDate() - offset);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function isOverdue(offset) {
+  const dl = new Date(S.deadline);
+  if (isNaN(dl)) return false;
+  const d = new Date(dl);
+  d.setDate(d.getDate() - offset);
+  d.setHours(23, 59, 59, 999);
+  return d < new Date();
+}
+
+/* ---------- DOM refs ---------- */
+const $ = id => document.getElementById(id);
+const cv  = $("cv");
+const ctx = cv.getContext("2d");
+
+/* ---------- Font loading gate ---------- */
+let fontsReady = false;
+const fontGate = document.fonts
+  ? Promise.all([
+      document.fonts.load('800 100px "Big Shoulders Display"'),
+      document.fonts.load('700 100px "Big Shoulders Display"'),
+      document.fonts.load('italic 600 100px "Fraunces"'),
+      document.fonts.load('600 40px "Manrope"'),
+      document.fonts.load('800 40px "Manrope"'),
+    ]).then(() => document.fonts.ready)
+  : Promise.resolve();
+
+fontGate.then(() => {
+  fontsReady = true;
+  $("download").disabled = false;
+  draw();
+}).catch(() => {
+  fontsReady = true;
+  $("download").disabled = false;
+  draw();
+});
+
+/* ================================================================
+   CANVAS DRAWING
+   ================================================================ */
+
+/* --- Canvas helpers --- */
+function rrPath(c2d, x, y, w, h, r) {
+  c2d.beginPath();
+  if (c2d.roundRect) {
+    c2d.roundRect(x, y, w, h, r);
+  } else {
+    c2d.moveTo(x + r, y);
+    c2d.lineTo(x + w - r, y);
+    c2d.quadraticCurveTo(x + w, y, x + w, y + r);
+    c2d.lineTo(x + w, y + h - r);
+    c2d.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    c2d.lineTo(x + r, y + h);
+    c2d.quadraticCurveTo(x, y + h, x, y + h - r);
+    c2d.lineTo(x, y + r);
+    c2d.quadraticCurveTo(x, y, x + r, y);
+    c2d.closePath();
+  }
+}
+function rr(x, y, w, h, r) { rrPath(ctx, x, y, w, h, r); }
+
+function spacing(v) {
+  if ("letterSpacing" in ctx) ctx.letterSpacing = v + "px";
+}
+
+function fitText(text, maxW) {
+  if (ctx.measureText(text).width <= maxW) return text;
+  while (text.length > 1 && ctx.measureText(text + "…").width > maxW)
+    text = text.slice(0, -1);
+  return text.trimEnd() + "…";
+}
+
+/* --- Draw background into an offscreen canvas so we can blur it into the card --- */
+function drawBackground(c2d, w, h) {
+  const k = w / 1080;
+  // 1. Main linear gradient (180deg, top to bottom)
+  const bg = c2d.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0,    "#06121A");
+  bg.addColorStop(0.38, "#0A2230");
+  bg.addColorStop(0.72, "#0F3B4C");
+  bg.addColorStop(1,    "#1B3340");
+  c2d.fillStyle = bg;
+  c2d.fillRect(0, 0, w, h);
+
+  // 2. Ember glow (radial-gradient(1100px 800px at 50% 112%, rgba(255,107,61,.8), transparent 70%))
+  c2d.save();
+  c2d.translate(0.5 * w, 1.12 * h);
+  c2d.scale(1100 / 800, 1);
+  const ember = c2d.createRadialGradient(0, 0, 0, 0, 0, 800 * (h / 1920));
+  ember.addColorStop(0,   "rgba(255,107,61,.8)");
+  ember.addColorStop(0.7, "rgba(255,107,61,0)");
+  ember.addColorStop(1,   "rgba(255,107,61,0)");
+  c2d.fillStyle = ember;
+  c2d.beginPath();
+  c2d.arc(0, 0, 800 * (h / 1920), 0, Math.PI * 2);
+  c2d.fill();
+  c2d.restore();
+
+  // 3. Faint gold glow (radial-gradient(700px 500px at 100% 40%, rgba(255,193,90,.10), transparent 70%))
+  c2d.save();
+  c2d.translate(w, 0.40 * h);
+  c2d.scale(700 / 500, 1);
+  const gold = c2d.createRadialGradient(0, 0, 0, 0, 0, 500 * (h / 1920));
+  gold.addColorStop(0,   "rgba(255,193,90,.10)");
+  gold.addColorStop(0.7, "rgba(255,193,90,0)");
+  gold.addColorStop(1,   "rgba(255,193,90,0)");
+  c2d.fillStyle = gold;
+  c2d.beginPath();
+  c2d.arc(0, 0, 500 * (h / 1920), 0, Math.PI * 2);
+  c2d.fill();
+  c2d.restore();
+
+  // 4. Bokeh blobs with 38px blur
+  const blobs = [
+    { x:  90*k, y:  270*k, r: 210*k, col: "rgba(53,200,255,.10)" },
+    { x: 910*k, y:  450*k, r: 150*k, col: "rgba(255,193,90,.10)" },
+    { x: 230*k, y: 1690*k, r: 190*k, col: "rgba(255,107,61,.22)" },
+    { x: 860*k, y: 1720*k, r: 160*k, col: "rgba(255,193,90,.18)" },
+  ];
+  blobs.forEach(({ x, y, r, col }) => {
+    c2d.save();
+    if ("filter" in c2d) {
+      c2d.filter = `blur(${Math.round(38 * k)}px)`;
+      c2d.fillStyle = col;
+      c2d.beginPath();
+      c2d.arc(x, y, r, 0, Math.PI * 2);
+      c2d.fill();
+    } else {
+      const rg = c2d.createRadialGradient(x, y, 0, x, y, r);
+      rg.addColorStop(0, col);
+      rg.addColorStop(1, col.replace(/[\d.]+\)$/, "0)"));
+      c2d.fillStyle = rg;
+      c2d.fillRect(0, 0, w, h);
+    }
+    c2d.restore();
+  });
+}
+
+/* --- Checkbox tick: exact translation of .cb.on::after --- */
+function drawTick(x, y, k) {
+  ctx.save();
+  ctx.translate(x + 14 * k, y + 6 * k);
+  ctx.rotate(45 * Math.PI / 180);
+  ctx.strokeStyle = "#08161F";
+  ctx.lineWidth   = 5 * k;
+  ctx.lineCap     = "square";
+  ctx.lineJoin    = "miter";
+  ctx.beginPath();
+  ctx.moveTo(11 * k, 0);
+  ctx.lineTo(11 * k, 22 * k);
+  ctx.lineTo(0, 22 * k);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* --- Main draw function --- */
+function draw() {
+  const k = W / 1080;
+
+  /* ---- Draw background to an offscreen canvas ---- */
+  const bgCanvas = document.createElement("canvas");
+  bgCanvas.width  = W;
+  bgCanvas.height = H;
+  const bgCtx = bgCanvas.getContext("2d");
+  drawBackground(bgCtx, W, H);
+
+  /* ---- Draw to main canvas ---- */
+  ctx.save();
+  ctx.clearRect(0, 0, W, H);
+
+  // Paint background from offscreen
+  ctx.drawImage(bgCanvas, 0, 0);
+
+  /* ---- GLASS CARD ---- */
+  const cardX      = 75 * k;
+  const cardY      = 634 * (H / 1920);
+  const cardW      = 930 * k;
+  const cardH      = 1068 * (H / 1920);
+  const cardR      = 56 * k;
+  const cardBottom = cardY + cardH;
+
+  // (a) Drop shadow: 0 30px 80px rgba(0,0,0,.35)
+  ctx.save();
+  ctx.shadowColor   = "rgba(0,0,0,.35)";
+  ctx.shadowBlur    = 80 * k;
+  ctx.shadowOffsetY = 30 * k;
+  rrPath(ctx, cardX, cardY, cardW, cardH, cardR);
+  ctx.fillStyle = "#000";
+  ctx.fill();
+  ctx.restore();
+
+  // (b) Re-draw clean background inside card area before blur
+  ctx.save();
+  rrPath(ctx, cardX, cardY, cardW, cardH, cardR);
+  ctx.clip();
+  ctx.drawImage(bgCanvas, 0, 0);
+  // Frosted backdrop blur (26px)
+  if ("filter" in ctx) {
+    ctx.filter = `blur(${Math.round(26 * k)}px)`;
+  }
+  ctx.drawImage(bgCanvas, 0, 0, W, H);
+  if ("filter" in ctx) ctx.filter = "none";
+
+  // (c) Glass fill: rgba(234,246,245,.09)
+  ctx.fillStyle = "rgba(234,246,245,.09)";
+  ctx.fill();
+
+  // (d) Glass border: 1.5px solid rgba(234,246,245,.22)
+  ctx.strokeStyle = "rgba(234,246,245,.22)";
+  ctx.lineWidth   = 1.5 * k;
+  ctx.stroke();
+  ctx.restore();
+
+  /* ---- TITLE BLOCK ---- */
+  const leftPad = 66 * k;
+  const innerW  = cardW - 132 * k;
+  const titleX  = cardX + leftPad;
+
+  ctx.textBaseline = "top";
+  ctx.textAlign    = "left";
+
+  // Line 1: T-MINUS (Big Shoulders Display 800, 176k, ember→gold gradient)
+  const tmSize = Math.round(176 * k);
+  ctx.font = `800 ${tmSize}px "Big Shoulders Display", BSD, sans-serif`;
+  spacing(2 * k);
+  const tminusTxt = "T-MINUS";
+  const tminusW   = ctx.measureText(tminusTxt).width;
+  const tmGrad    = ctx.createLinearGradient(titleX, 0, titleX + tminusW, 0);
+  tmGrad.addColorStop(0, "#FF6B3D");
+  tmGrad.addColorStop(1, "#FFC15A");
+  ctx.fillStyle = tmGrad;
+  ctx.fillText(tminusTxt, titleX, cardY + 30 * k);
+  spacing(0);
+
+  // Line 2: COUNTDOWN: (Big Shoulders Display 700, 84k, frost)
+  const cdSize = Math.round(84 * k);
+  ctx.font      = `700 ${cdSize}px "Big Shoulders Display", BSD, sans-serif`;
+  spacing(6 * k);
+  ctx.fillStyle = "#EAF6F5";
+  ctx.fillText("COUNTDOWN:", cardX + 68 * k, cardY + 196 * k);
+  spacing(0);
+
+  // Line 3: goal title (Fraunces italic 600, 82k, gold — auto-fit / wrap)
+  let goalFontSize = 82 * k;
+  const minGoalSize = 52 * k;
+  ctx.font = `italic 600 ${Math.round(goalFontSize)}px "Fraunces", FR, serif`;
+  let goalLines  = [S.goal];
+  let extraShift = 0;
+
+  while (ctx.measureText(S.goal).width > innerW && goalFontSize > minGoalSize) {
+    goalFontSize -= 2 * k;
+    ctx.font = `italic 600 ${Math.round(goalFontSize)}px "Fraunces", FR, serif`;
+  }
+  if (ctx.measureText(S.goal).width > innerW) {
+    // Wrap to 2 lines at min size
+    const words = S.goal.split(/\s+/);
+    let line1 = "", line2 = "";
+    for (const w of words) {
+      const test = line1 ? line1 + " " + w : w;
+      if (ctx.measureText(test).width <= innerW) line1 = test;
+      else line2 = line2 ? line2 + " " + w : w;
+    }
+    goalLines  = line2 ? [line1, line2] : [line1];
+    extraShift = goalLines.length > 1 ? Math.round(goalFontSize * 1.1) : 0;
+  }
+  ctx.fillStyle = "#FFC15A";
+  goalLines.forEach((line, i) => {
+    ctx.fillText(line, titleX, cardY + 282 * k + i * Math.round(goalFontSize * 1.15));
+  });
+
+  /* ---- MILESTONE ROWS ---- */
+  const rowsTop  = cardY + 424 * k + extraShift;
+  const n        = S.milestones.length;
+  const rowH     = 96 * k;
+  const pitch    = n > 1
+    ? (n === 6 ? 104 * k : Math.min(120 * k, Math.max(84 * k, (cardBottom - 30 * k - rowsTop - rowH) / (n - 1))))
+    : rowH;
+
+  const cbLeft    = cardX + leftPad;
+  const cbSize    = 46 * k;
+  const textLeft  = cardX + 144 * k;
+  const iconRight = cardX + cardW - leftPad;
+
+  if (n === 0) {
+    ctx.font         = `600 ${Math.round(40 * k)}px "Manrope", MR, sans-serif`;
+    ctx.fillStyle    = "rgba(234,246,245,.55)";
+    ctx.textBaseline = "top";
+    ctx.fillText("No milestones yet", cbLeft, rowsTop + 20 * k);
+  } else {
+    S.milestones.forEach((ms, i) => {
+      const ry = rowsTop + i * pitch;
+
+      /* ---- Checkbox ---- */
+      const cbY = ry + 14 * k;
+      rrPath(ctx, cbLeft, cbY, cbSize, cbSize, 13 * k);
+      if (ms.done) {
+        ctx.fillStyle   = "#FFC15A";
+        ctx.fill();
+        ctx.strokeStyle = "#FFC15A";
+        ctx.lineWidth   = 3 * k;
+        ctx.stroke();
+        drawTick(cbLeft, cbY, k);
+      } else {
+        ctx.strokeStyle = "rgba(234,246,245,.6)";
+        ctx.lineWidth   = 3 * k;
+        ctx.stroke();
+      }
+
+      /* ---- Label line: "T-28 · Nov 17" ---- */
+      ctx.textBaseline = "top";
+      ctx.font         = `800 ${Math.round(33 * k)}px "Manrope", MR, sans-serif`;
+      ctx.fillStyle    = "#FF8A5C";
+      const tLabel     = `T-${ms.offset}`;
+      ctx.fillText(tLabel, textLeft, ry);
+      const labelW     = ctx.measureText(tLabel).width;
+      const dateTxt    = " · " + msDate(ms.offset);
+      ctx.fillStyle    = "#FFC15A";
+      ctx.fillText(dateTxt, textLeft + labelW, ry);
+
+      /* ---- Title line ---- */
+      const titleY = ry + 44 * k;
+      ctx.font = `600 ${Math.round(40 * k)}px "Manrope", MR, sans-serif`;
+      if (ms.done) {
+        ctx.globalAlpha  = 0.55;
+        ctx.fillStyle    = "#EAF6F5";
+        ctx.fillText(ms.t, textLeft, titleY);
+        // Strikethrough
+        const tw = ctx.measureText(ms.t).width;
+        ctx.fillRect(textLeft, titleY + Math.round(40 * k * 0.5), tw, Math.round(3 * k));
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.fillStyle = "#EAF6F5";
+        ctx.fillText(ms.t, textLeft, titleY);
+      }
+
+      /* ---- Icon (72k × 72k, Path2D on 24-unit grid scaled by 3k) ---- */
+      const iconSize = 72 * k;
+      const iconX    = iconRight - iconSize;
+      const iconY    = ry + 6 * k;
+      const iScale   = 3 * k;
+      ctx.save();
+      ctx.translate(iconX, iconY);
+      ctx.scale(iScale, iScale);
+      ctx.fillStyle   = "transparent";
+      ctx.strokeStyle = "#FFC15A";
+      ctx.lineWidth   = 1.6;   // 1.6 in 24-unit grid scales to 4.8k px (exact match to SVG stroke-width="1.6")
+      ctx.lineCap     = "round";
+      ctx.lineJoin    = "round";
+      ctx.beginPath();
+      const iconPath = new Path2D(ICONS[ms.icon] || ICONS.scope);
+      ctx.stroke(iconPath);
+      ctx.restore();
+    });
+  }
+
+  ctx.restore();
+}
+
+/* ================================================================
+   WEB UI RENDERING
+   ================================================================ */
+
+function renderMilestones() {
+  const ul = $("ms");
+  sortMilestones();
+  const firstOpen = S.milestones.findIndex(m => !m.done);
+
+  ul.innerHTML = S.milestones.map((ms, i) => {
+    const date     = msDate(ms.offset);
+    const over     = isOverdue(ms.offset) && !ms.done;
+    const isNext   = i === firstOpen && !over;
+    const label    = ms.offset === 0 ? "T-0" : `T-${ms.offset}`;
+    return `<li class="item ${ms.done ? "done" : ""}" data-ms-i="${i}">
+      <input type="checkbox" data-k="ms" data-i="${i}" ${ms.done ? "checked" : ""}
+        aria-label="Mark '${esc(ms.t)}' done">
+      <div class="item-body">
+        <div class="item-label ${over ? "overdue" : ""}">
+          ${esc(label)} <span class="date-part">· ${esc(date)}</span>
+          ${isNext  ? '<span class="tag">Next</span>' : ""}
+          ${over    ? '<span class="tag-overdue">Overdue</span>' : ""}
+        </div>
+        <div class="item-title">${esc(ms.t)}</div>
+      </div>
+      <div class="item-actions">
+        <button class="icon-btn" data-icon-pick="${i}" aria-label="Change icon for '${esc(ms.t)}'">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="${esc(ICONS[ms.icon] || ICONS.scope)}"/>
+          </svg>
+        </button>
+        <button class="icon-btn" data-edit="${i}" aria-label="Edit '${esc(ms.t)}'">✎</button>
+        <button class="icon-btn del" data-del-ms="${i}" aria-label="Delete '${esc(ms.t)}'">×</button>
+      </div>
+    </li>`;
+  }).join("");
+
+  const done = S.milestones.filter(m => m.done).length;
+  $("msCount").textContent = `${done}/${S.milestones.length} done`;
+  $("msAdd").disabled  = S.milestones.length >= MAX_MS;
+  $("msMaxMsg").style.display = S.milestones.length >= MAX_MS ? "block" : "none";
+}
+
+function renderTasks() {
+  const ul  = $("tk");
+  ul.innerHTML = S.tasks.map((t, i) =>
+    `<li class="item task-item ${t.done ? "done" : ""}">
+       <input type="checkbox" data-k="tk" data-i="${i}" ${t.done ? "checked" : ""}
+         aria-label="Mark task done">
+       <p>${esc(t.t)}</p>
+       <button class="icon-btn del" data-del-tk="${i}" aria-label="Delete task">×</button>
+     </li>`
+  ).join("");
+  const done = S.tasks.filter(t => t.done).length;
+  $("tkCount").textContent = `${done}/${S.tasks.length} done`;
+}
+
+function tick() {
   const end = new Date(S.deadline).getTime();
   const now = Date.now();
-  let ms = isNaN(end) ? 0 : end - now;
+  let ms  = isNaN(end) ? 0 : end - now;
   const over = ms <= 0; if (over) ms = 0;
   const secs = Math.floor(ms / 1000);
   let start = S.start;
   if (!(start < end)) start = end - 30 * 864e5;
   const pct = over ? 100 : Math.min(100, Math.max(0, (now - start) / (end - start) * 100));
-  return {
-    d: Math.floor(secs / 86400), h: Math.floor(secs % 86400 / 3600),
-    m: Math.floor(secs % 3600 / 60), s: secs % 60, over, pct, end
+  const c = {
+    d: Math.floor(secs / 86400),
+    h: Math.floor(secs % 86400 / 3600),
+    m: Math.floor(secs % 3600 / 60),
+    s: secs % 60,
+    over, pct, end,
   };
+
+  $("d").textContent = c.d;
+  $("h").textContent = pad(c.h);
+  $("m").textContent = pad(c.m);
+  $("s").textContent = pad(c.s);
+  $("bar").style.width = c.pct.toFixed(1) + "%";
+  $("pct").textContent  = c.pct.toFixed(1) + "% of time elapsed";
+  $("dlText").textContent = isNaN(c.end)
+    ? "Pick a valid deadline"
+    : "Deadline: " + new Date(c.end).toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" });
+  $("banner").style.display = c.over ? "block" : "none";
+
+  // Phone clock overlay
+  const n = new Date();
+  $("cTime").textContent = (n.getHours() % 12 || 12) + ":" + pad(n.getMinutes());
+  $("cDate").textContent = n.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+
+  draw();
 }
 
-/* ---------- DOM refs ---------- */
-const $ = id => document.getElementById(id);
-const cv = $("cv"), ctx = cv.getContext("2d");
-
-/* ---------- UI rendering ---------- */
-function renderTheme(){
-  $("themes").innerHTML = THEMES.map((t,i) =>
-    `<button class="sw ${i===S.theme?"on":""}" data-i="${i}" title="${t.name}" aria-label="${t.name} theme" style="background:linear-gradient(135deg,${t.a},${t.b})"></button>`).join("");
-}
-function renderList(ul, arr, kind){
-  const firstOpen = kind === "ms" ? arr.findIndex(x => !x.done) : -1;
-  ul.innerHTML = arr.map((x,i) =>
-    `<li class="item ${x.done?"done":""} ${i===firstOpen?"now":""}">
-       <input type="checkbox" data-k="${kind}" data-i="${i}" ${x.done?"checked":""} aria-label="Toggle">
-       <p>${esc(x.t)}</p>${i===firstOpen?'<span class="tag">Now</span>':""}
-       <button class="x" data-k="${kind}" data-del="${i}" aria-label="Delete">×</button></li>`).join("");
-  const n = arr.filter(x => x.done).length;
-  $(kind + "Count").textContent = `${n}/${arr.length} done`;
-}
-function renderAll(){
-  $("goal").value = S.goal; $("dead").value = S.deadline;
+function renderAll() {
+  $("goal").value  = S.goal;
+  $("dead").value  = S.deadline;
+  $("device").value = S.device || "android-916";
   $("goalView").textContent = S.goal;
-  renderTheme(); renderList($("ms"), S.milestones, "ms"); renderList($("tk"), S.tasks, "tk");
+
+  // Update canvas ARIA label
+  cv.setAttribute("aria-label",
+    `Wallpaper preview: ${S.goal}, ${S.milestones.length} milestones`);
+
+  applyDevice(S.device || "android-916");
+  renderMilestones();
+  renderTasks();
   tick();
 }
-function tick(){
-  const c = calc();
-  $("d").textContent = c.d; $("h").textContent = pad(c.h); $("m").textContent = pad(c.m); $("s").textContent = pad(c.s);
-  $("bar").style.width = c.pct.toFixed(1) + "%";
-  $("pct").textContent = c.pct.toFixed(1) + "% of time elapsed";
-  $("dlText").textContent = isNaN(c.end) ? "Pick a valid deadline" :
-    "Deadline: " + new Date(c.end).toLocaleString(undefined, {dateStyle:"long", timeStyle:"short"});
-  $("banner").style.display = c.over ? "block" : "none";
-  const now = new Date();
-  $("cTime").textContent = (now.getHours() % 12 || 12) + ":" + pad(now.getMinutes());
-  $("cDate").textContent = now.toLocaleDateString(undefined, {weekday:"long", month:"long", day:"numeric"});
-  draw(c);
+
+/* ================================================================
+   ICON PICKER POPUP
+   ================================================================ */
+let pickerTarget = null;  // milestone index
+
+function showIconPicker(msIndex, anchorEl) {
+  // Remove any existing picker
+  const old = document.getElementById("iconPicker");
+  if (old) old.remove();
+  if (pickerTarget === msIndex) { pickerTarget = null; return; }
+  pickerTarget = msIndex;
+
+  const div = document.createElement("div");
+  div.id = "iconPicker";
+  div.className = "edit-wrap icon-picker";
+  div.style.marginTop = "8px";
+  div.setAttribute("role", "group");
+  div.setAttribute("aria-label", "Choose icon");
+  div.innerHTML = ICON_KEYS.map(key =>
+    `<button class="icon-opt ${S.milestones[msIndex].icon === key ? "on" : ""}"
+       data-pick-icon="${key}" data-pick-mi="${msIndex}"
+       aria-label="${key}" aria-pressed="${S.milestones[msIndex].icon === key}">
+       <svg viewBox="0 0 24 24"><path d="${esc(ICONS[key])}"/></svg>
+     </button>`
+  ).join("");
+  anchorEl.closest("li").after(div);
 }
 
-/* ---------- Canvas helpers ---------- */
-function rr(x,y,w,h,r){ ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x,y,w,h,r) : ctx.rect(x,y,w,h); }
-function setFont(px, wt){ ctx.font = `${wt||500} ${px}px ${FONT}`; }
-function spacing(v){ if ("letterSpacing" in ctx) ctx.letterSpacing = v + "px"; }
-function fit(text, maxW){
-  if (ctx.measureText(text).width <= maxW) return text;
-  while (text.length > 1 && ctx.measureText(text + "…").width > maxW) text = text.slice(0, -1);
-  return text.trimEnd() + "…";
+/* ================================================================
+   EDIT FORM
+   ================================================================ */
+let editIndex = null;
+
+function openEdit(i) {
+  editIndex = i;
+  const ms = S.milestones[i];
+  $("msEditOffset").value = ms.offset;
+  $("msEditIn").value     = ms.t;
+  updateWordCounter($("msEditIn"), $("msEditWordCount"));
+  $("msEditWrap").style.display = "block";
+  $("msEditIn").focus();
+  // Hide add picker if visible
+  const p = $("iconPicker"); if (p) p.remove(); pickerTarget = null;
 }
-function wrap(text, maxW, maxLines){
-  const words = text.split(/\s+/), lines = []; let cur = "";
-  for (const w of words){
-    const t = cur ? cur + " " + w : w;
-    if (ctx.measureText(t).width > maxW && cur){ lines.push(cur); cur = w; } else cur = t;
+
+function closeEdit() {
+  editIndex = null;
+  $("msEditWrap").style.display = "none";
+  $("msEditErr").textContent   = "";
+}
+
+function updateWordCounter(input, counter) {
+  const wc = wordCount(input.value);
+  counter.textContent = `${wc}/${WORD_LIMIT} words`;
+  counter.classList.toggle("over", wc > WORD_LIMIT);
+}
+
+/* ================================================================
+   EVENTS
+   ================================================================ */
+
+// Goal input
+$("goal").addEventListener("input", e => {
+  S.goal = e.target.value.trim() || "My Goal";
+  $("goalView").textContent = S.goal;
+  cv.setAttribute("aria-label", `Wallpaper preview: ${S.goal}, ${S.milestones.length} milestones`);
+  save(); draw();
+});
+
+// Deadline
+$("dead").addEventListener("input", e => {
+  if (e.target.value) { S.deadline = e.target.value; save(); tick(); renderMilestones(); }
+});
+
+// Device
+$("device").addEventListener("change", e => {
+  S.device = e.target.value; save(); applyDevice(S.device); draw();
+});
+
+// Word counter on add form
+$("msIn").addEventListener("input", () => {
+  updateWordCounter($("msIn"), $("msWordCount"));
+  $("msErr").textContent = "";
+});
+
+// Word counter on edit form
+$("msEditIn").addEventListener("input", () => {
+  updateWordCounter($("msEditIn"), $("msEditWordCount"));
+  $("msEditErr").textContent = "";
+});
+
+// Add milestone
+$("msForm").addEventListener("submit", e => {
+  e.preventDefault();
+  if ($("msAdd").disabled) return;
+
+  const rawOffset = $("msOffset").value;
+  const rawTitle  = $("msIn").value.trim();
+  const offset    = parseInt(rawOffset, 10);
+
+  // Validation
+  if (isNaN(offset) || offset < 0 || offset > 365) {
+    $("msErr").textContent = "Enter a day offset between 0 and 365."; return;
   }
-  if (cur) lines.push(cur);
-  if (lines.length > maxLines){ lines.length = maxLines; lines[maxLines-1] = fit(lines[maxLines-1] + "…", maxW); }
-  return lines;
-}
-
-/* ---------- Wallpaper drawing (1080 × 1920) ---------- */
-function draw(c){
-  const T = THEMES[S.theme];
-  ctx.save(); ctx.clearRect(0,0,W,H); ctx.textBaseline = "alphabetic"; spacing(0);
-
-  // background
-  let g = ctx.createLinearGradient(0,0,W*.6,H);
-  g.addColorStop(0,T.bg[0]); g.addColorStop(.5,T.bg[1]); g.addColorStop(1,T.bg[2]);
-  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
-  [[920,260,650,T.a,.38],[90,1250,720,T.b,.30],[620,1750,560,T.a,.22]].forEach(([x,y,r,col,a]) => {
-    const rg = ctx.createRadialGradient(x,y,0,x,y,r);
-    rg.addColorStop(0, col + Math.round(a*255).toString(16).padStart(2,"0")); rg.addColorStop(1, col + "00");
-    ctx.fillStyle = rg; ctx.fillRect(0,0,W,H);
-  });
-
-  // goal title
-  ctx.textAlign = "left"; ctx.fillStyle = T.a; setFont(30,700); spacing(8);
-  ctx.fillText("MY GOAL", 90, 600);
-  spacing(0); setFont(76,700); ctx.fillStyle = "#fff";
-  const lines = wrap(S.goal, 900, 2);
-  lines.forEach((l,i) => ctx.fillText(l, 90, 690 + i*88));
-  const yD = 690 + (lines.length-1)*88;
-
-  // big days number
-  const base = yD + 270;
-  setFont(270,700); ctx.textAlign = "left";
-  const dTxt = String(c.d), dW = ctx.measureText(dTxt).width;
-  let tg = ctx.createLinearGradient(90,base-240,90+dW,base);
-  tg.addColorStop(0,T.a); tg.addColorStop(1,T.b);
-  ctx.fillStyle = tg; ctx.shadowColor = T.b + "88"; ctx.shadowBlur = 50;
-  ctx.fillText(dTxt, 90, base); ctx.shadowBlur = 0;
-  setFont(40,600); ctx.fillStyle = "rgba(255,255,255,.75)"; spacing(6);
-  ctx.fillText(c.d === 1 ? "DAY LEFT" : "DAYS LEFT", 90 + dW + 36, base - 6); spacing(0);
-
-  // h / m / s boxes
-  const by = base + 50, bw = 280, bh = 180, gap = 30;
-  [["h",c.h,"HOURS"],["m",c.m,"MINUTES"],["s",c.s,"SECONDS"]].forEach(([k,v,lab],i) => {
-    const x = 90 + i*(bw+gap);
-    rr(x,by,bw,bh,36); ctx.fillStyle = "rgba(255,255,255,.07)"; ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,.14)"; ctx.lineWidth = 2; ctx.stroke();
-    ctx.textAlign = "center"; ctx.fillStyle = "#fff"; setFont(96,700); ctx.fillText(pad(v), x+bw/2, by+108);
-    ctx.fillStyle = "rgba(255,255,255,.55)"; setFont(24,600); spacing(5); ctx.fillText(lab, x+bw/2, by+152); spacing(0);
-  });
-
-  // progress bar
-  const py = by + bh + 50;
-  rr(90,py,900,16,8); ctx.fillStyle = "rgba(255,255,255,.12)"; ctx.fill();
-  if (c.pct > 0){
-    const pg = ctx.createLinearGradient(90,0,990,0); pg.addColorStop(0,T.a); pg.addColorStop(1,T.b);
-    rr(90,py,Math.max(16,900*c.pct/100),16,8); ctx.fillStyle = pg; ctx.fill();
+  if (!rawTitle) {
+    $("msErr").textContent = "Please enter a milestone title."; return;
   }
-  ctx.textAlign = "left"; ctx.fillStyle = "rgba(255,255,255,.6)"; setFont(26,500);
-  ctx.fillText(c.over ? "Deadline reached" : c.pct.toFixed(0) + "% of time elapsed", 90, py + 54);
-  ctx.textAlign = "right";
-  ctx.fillText(isNaN(c.end) ? "" : new Date(c.end).toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}), 990, py + 54);
+  const wc = wordCount(rawTitle);
+  if (wc > WORD_LIMIT) {
+    $("msErr").textContent = `Title must be ${WORD_LIMIT} words or fewer (you have ${wc}).`; return;
+  }
+  const charCount = rawTitle.length;
+  if (charCount > 28) {
+    $("msErr").textContent = `Title must be 28 characters or fewer.`; return;
+  }
+  if (S.milestones.some(m => m.offset === offset)) {
+    $("msErr").textContent = `A milestone for T-${offset} already exists.`; return;
+  }
+  if (S.milestones.length >= MAX_MS) {
+    $("msErr").textContent = "7 milestones max so the wallpaper stays readable."; return;
+  }
 
-  // cards: milestones + checklist
-  const cy = py + 100, ch = Math.min(330, 1735 - cy), cw = 435;
-  card(90, cy, cw, ch, "THIS WEEK", S.milestones.filter(m => !m.done).slice(0,3).map(m => ({t:m.t.replace(/^.*?·\s*/,""), done:false, dot:true})), T);
-  const tdone = S.tasks.filter(t => t.done).length;
-  card(90+cw+30, cy, cw, ch, `TODAY  ${tdone}/${S.tasks.length}`, S.tasks.slice(0,4), T);
+  S.milestones.push({ offset, t: rawTitle, icon: "scope", done: false });
+  $("msOffset").value = "";
+  $("msIn").value     = "";
+  $("msWordCount").textContent = "0/5 words";
+  $("msWordCount").classList.remove("over");
+  $("msErr").textContent = "";
+  save(); renderMilestones(); draw();
+});
 
-  // footer
-  ctx.textAlign = "center"; ctx.fillStyle = "rgba(255,255,255,.35)"; setFont(24,600); spacing(8);
-  ctx.fillText("DEADLINEOS", W/2, 1790); spacing(0);
-  ctx.restore();
-}
-function card(x,y,w,h,title,items,T){
-  rr(x,y,w,h,36); ctx.fillStyle = "rgba(255,255,255,.07)"; ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,.14)"; ctx.lineWidth = 2; ctx.stroke();
-  ctx.textAlign = "left"; ctx.fillStyle = T.a; setFont(24,700); spacing(5); ctx.fillText(title, x+32, y+54); spacing(0);
-  if (!items.length){ ctx.fillStyle = "rgba(255,255,255,.5)"; setFont(26,500); ctx.fillText("All done 🎉", x+32, y+110); return; }
-  const step = Math.min(66, (h-90)/Math.max(items.length,1));
-  items.forEach((it,i) => {
-    const iy = y + 108 + i*step;
-    if (it.dot){
-      ctx.fillStyle = T.b; ctx.beginPath(); ctx.arc(x+44, iy-9, 7, 0, 7); ctx.fill();
-    } else {
-      rr(x+32, iy-26, 30, 30, 9);
-      if (it.done){ const g = ctx.createLinearGradient(x,iy,x+60,iy); g.addColorStop(0,T.a); g.addColorStop(1,T.b); ctx.fillStyle = g; ctx.fill();
-        ctx.strokeStyle = "#fff"; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(x+39,iy-11); ctx.lineTo(x+45,iy-5); ctx.lineTo(x+56,iy-19); ctx.stroke(); }
-      else { ctx.strokeStyle = "rgba(255,255,255,.4)"; ctx.lineWidth = 3; ctx.stroke(); }
-    }
-    setFont(27,500); ctx.fillStyle = it.done ? "rgba(255,255,255,.4)" : "#fff";
-    const tx = x + 80, txt = fit(it.t, w - 80 - 24);
-    ctx.fillText(txt, tx, iy);
-    if (it.done){ ctx.fillRect(tx, iy-9, ctx.measureText(txt).width, 2); }
-  });
-}
+// Edit save
+$("msEditSave").addEventListener("click", () => {
+  if (editIndex === null) return;
+  const rawOffset = $("msEditOffset").value;
+  const rawTitle  = $("msEditIn").value.trim();
+  const offset    = parseInt(rawOffset, 10);
 
-/* ---------- Events ---------- */
-$("goal").addEventListener("input", e => { S.goal = e.target.value.trim() || "My Goal"; $("goalView").textContent = S.goal; save(); tick(); });
-$("dead").addEventListener("input", e => { if (e.target.value){ S.deadline = e.target.value; save(); tick(); } });
-$("themes").addEventListener("click", e => { const b = e.target.closest(".sw"); if (!b) return; S.theme = +b.dataset.i; save(); renderTheme(); tick(); });
+  if (isNaN(offset) || offset < 0 || offset > 365) {
+    $("msEditErr").textContent = "Enter a day offset between 0 and 365."; return;
+  }
+  if (!rawTitle) {
+    $("msEditErr").textContent = "Please enter a milestone title."; return;
+  }
+  const wc = wordCount(rawTitle);
+  if (wc > WORD_LIMIT) {
+    $("msEditErr").textContent = `Title must be ${WORD_LIMIT} words or fewer (you have ${wc}).`; return;
+  }
+  if (rawTitle.length > 28) {
+    $("msEditErr").textContent = "Title must be 28 characters or fewer."; return;
+  }
+  const dupIdx = S.milestones.findIndex((m, i) => m.offset === offset && i !== editIndex);
+  if (dupIdx !== -1) {
+    $("msEditErr").textContent = `A milestone for T-${offset} already exists.`; return;
+  }
 
-function bindList(ulId, formId, inputId, key, kind){
-  $(ulId).addEventListener("click", e => {
-    const del = e.target.closest("[data-del]");
-    if (del){ S[key].splice(+del.dataset.del, 1); }
-    else if (e.target.matches("input[type=checkbox]")){ S[key][+e.target.dataset.i].done = e.target.checked; }
-    else return;
-    save(); renderList($(ulId), S[key], kind); tick();
-  });
-  $(formId).addEventListener("submit", e => {
-    e.preventDefault(); const v = $(inputId).value.trim(); if (!v) return;
-    S[key].push({t:v, done:false}); $(inputId).value = ""; save(); renderList($(ulId), S[key], kind); tick();
-  });
-}
-bindList("ms","msForm","msIn","milestones","ms");
-bindList("tk","tkForm","tkIn","tasks","tk");
+  S.milestones[editIndex].offset = offset;
+  S.milestones[editIndex].t      = rawTitle;
+  closeEdit();
+  save(); renderMilestones(); draw();
+});
 
+$("msEditCancel").addEventListener("click", closeEdit);
+
+// Milestone list events (checkbox, delete, edit, icon)
+$("ms").addEventListener("click", e => {
+  // Checkbox
+  const cb = e.target.closest("input[type=checkbox][data-k=ms]");
+  if (cb) {
+    S.milestones[+cb.dataset.i].done = cb.checked;
+    save(); renderMilestones(); draw(); return;
+  }
+  // Delete
+  const del = e.target.closest("[data-del-ms]");
+  if (del) {
+    S.milestones.splice(+del.dataset.delMs, 1);
+    const p = $("iconPicker"); if (p) p.remove(); pickerTarget = null;
+    closeEdit();
+    save(); renderMilestones(); draw(); return;
+  }
+  // Edit
+  const edit = e.target.closest("[data-edit]");
+  if (edit) { openEdit(+edit.dataset.edit); return; }
+  // Icon picker toggle
+  const iconPickBtn = e.target.closest("[data-icon-pick]");
+  if (iconPickBtn) { showIconPicker(+iconPickBtn.dataset.iconPick, iconPickBtn); return; }
+});
+
+// Icon picker selection
+document.addEventListener("click", e => {
+  const opt = e.target.closest("[data-pick-icon]");
+  if (opt) {
+    const mi   = +opt.dataset.pickMi;
+    const icon = opt.dataset.pickIcon;
+    S.milestones[mi].icon = icon;
+    save(); renderMilestones(); draw();
+    const p = $("iconPicker"); if (p) p.remove(); pickerTarget = null;
+    return;
+  }
+  // Close picker when clicking outside
+  const picker = $("iconPicker");
+  if (picker && !picker.contains(e.target) && !e.target.closest("[data-icon-pick]")) {
+    picker.remove(); pickerTarget = null;
+  }
+});
+
+// Task list
+$("tk").addEventListener("click", e => {
+  const cb = e.target.closest("input[type=checkbox][data-k=tk]");
+  if (cb) { S.tasks[+cb.dataset.i].done = cb.checked; save(); renderTasks(); return; }
+  const del = e.target.closest("[data-del-tk]");
+  if (del) { S.tasks.splice(+del.dataset.delTk, 1); save(); renderTasks(); return; }
+});
+
+$("tkForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const v = $("tkIn").value.trim(); if (!v) return;
+  S.tasks.push({ t: v, done: false });
+  $("tkIn").value = "";
+  save(); renderTasks();
+});
+
+// Download
 $("download").addEventListener("click", () => {
-  draw(calc());
+  draw();
+  const preset = DEVICE_PRESETS[S.device] || DEVICE_PRESETS["android-916"];
+  const slug   = slugify(S.goal);
+  const fname  = `tzero-${slug}-${preset.W}x${preset.H}.png`;
   cv.toBlob(blob => {
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "deadlineos-wallpaper-1080x1920.png";
+    const a  = document.createElement("a");
+    a.href   = URL.createObjectURL(blob);
+    a.download = fname;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   }, "image/png");
 });
 
-/* ---------- Boot ---------- */
+/* ================================================================
+   BOOT
+   ================================================================ */
 renderAll();
 setInterval(tick, 1000);
-if (document.fonts) {
-  Promise.all([document.fonts.load('700 40px "Space Grotesk"'), document.fonts.load('500 30px "Space Grotesk"')])
-    .then(() => document.fonts.ready).then(tick).catch(() => {});
-}
